@@ -1,7 +1,8 @@
-1. fastapi
-2. pydantic
-3. typing
-4. langchain_community
-5. langgraph
-6. langchain_groq
-7. uvicorn
+fastapi
+pydantic
+langgraph
+langchain_groq
+uvicorn
+streamlit
+requests
+python-dotenv

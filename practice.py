@@ -1,62 +1,89 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import List
-from langchain_community.tools.tavily_search import TavilySearchResults
 import os
-from langgraph.prebuilt import create_react_agent
-from langchain_groq import ChatGroq
-from langchain_core.messages import AIMessage
-import traceback
 
-# Set API keys
-groq_api_key = "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"
-os.environ["TAVILY_API_KEY"] = "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"
+import requests
+import streamlit as st
 
-# Supported model names
-MODEL_NAMES = ["llama3-70b-8192"]
 
-# Initialize tools
-tool_tavily = TavilySearchResults(max_results=2)
-tools = [tool_tavily]
+API_URL = os.getenv("STORY_API_URL", "http://127.0.0.1:7860/chat")
+MODEL_NAME = "llama-3.3-70b-versatile"
+GENRES = ["Thriller", "Romance", "Fantasy", "Self Help", "Sci-Fi", "Horror"]
 
-# Create FastAPI instance
-app = FastAPI(title='LangGraph AI Agent')
 
-# Request body model
-class RequestState(BaseModel):
-    model_name: str
-    system_prompt: str
-    messages: List[str]
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-# API endpoint
-@app.post("/chat")
-def chat_endpoint(request: RequestState):
-    try:
-        if request.model_name not in MODEL_NAMES:
-            return {"error": "Invalid model name. Please select a valid model."}
 
-        llm = ChatGroq(groq_api_key=groq_api_key, model_name=request.model_name)
-        agent = create_react_agent(llm, tools=tools)
+st.sidebar.title("Chat History")
+with st.sidebar.expander("Past Narratives", expanded=False):
+    if st.session_state.chat_history:
+        for idx, chat in enumerate(reversed(st.session_state.chat_history), start=1):
+            st.markdown(f"**{idx}. Genres:** {', '.join(chat['genre'])}")
+            st.markdown(f"**Prompt:** {chat['prompt']}")
+    else:
+        st.caption("Your generated stories will appear here.")
 
-        message_history = [{"role": "system", "content": request.system_prompt}]
-        message_history += [{"role": "user", "content": msg} for msg in request.messages]
 
-        state = {"messages": message_history}
-        result = agent.invoke(state)
+st.title("Inkpot")
+genre = st.multiselect("Genres:", GENRES)
+prompt = st.text_area(
+    "Story Arc / Chapter Concept:",
+    placeholder="Enter your story idea",
+    height=120,
+)
+story_length = "moderate"
 
-        # Extract assistant messages for frontend
-        assistant_messages = [
-            {"role": "assistant", "content": msg.content}
-            for msg in result["messages"]
-            if isinstance(msg, AIMessage)
-        ]
-        return {"messages": assistant_messages}
 
-    except Exception as e:
-        traceback.print_exc()
-        return {"error": str(e)}
+if st.button("Narrate", type="primary"):
+    if not prompt.strip():
+        st.warning("Please enter a story arc or chapter concept.")
+    elif not genre:
+        st.warning("Please select at least one genre.")
+    else:
+        payload = {
+            "model_name": MODEL_NAME,
+            "system_prompt": (
+                "You are a storytelling assistant. Based on the user's input, generate a complete short story "
+                "with a structured narrative: engaging opening, character development, plot twists, climax, and "
+                f"resolution. Ensure the writing reflects genre elements and matches the selected story length: {story_length}."
+            ),
+            "messages": [
+                f"Story idea: {prompt}. Genres: {', '.join(genre)}. Write a full story based on this arc."
+            ],
+        }
 
-# Run locally
-if __name__ == '__main__':
-    import uvicorn
-    uvicorn.run(app, host='127.0.0.1', port=7860)
+        try:
+            response = requests.post(API_URL, json=payload, timeout=120)
+            response.raise_for_status()
+            response_data = response.json()
+        except requests.exceptions.ConnectionError:
+            st.error(
+                "Could not reach the backend API at "
+                f"`{API_URL}`. Start `prj.py` separately before generating a story."
+            )
+        except requests.exceptions.Timeout:
+            st.error("The backend took too long to respond. Please try again.")
+        except requests.exceptions.RequestException as exc:
+            st.error(f"Request failed: {exc}")
+        else:
+            if "error" in response_data:
+                st.error(f"Model Error: {response_data['error']}")
+            else:
+                ai_response = [
+                    message["content"]
+                    for message in response_data.get("messages", [])
+                    if message.get("role") == "assistant"
+                ]
+
+                if ai_response:
+                    story = ai_response[-1]
+                    st.subheader("Your Story")
+                    st.markdown(story)
+                    st.session_state.chat_history.append(
+                        {
+                            "genre": genre,
+                            "prompt": prompt,
+                            "response": story,
+                        }
+                    )
+                else:
+                    st.warning("No AI response found in the model output.")
